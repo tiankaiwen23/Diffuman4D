@@ -87,6 +87,7 @@ class TransformerMultiviewModel(Transformer2DModel):
         attention_mask: Optional[torch.Tensor] = None,
         encoder_attention_mask: Optional[torch.Tensor] = None,
         num_frames: int = 1,
+        num_views: int = 1,
         return_dict: bool = True,
     ):
         """
@@ -190,6 +191,7 @@ class TransformerMultiviewModel(Transformer2DModel):
                     cross_attention_kwargs,
                     class_labels,
                     num_frames,
+                    num_views,
                     **ckpt_kwargs,
                 )
             else:
@@ -202,6 +204,7 @@ class TransformerMultiviewModel(Transformer2DModel):
                     cross_attention_kwargs=cross_attention_kwargs,
                     class_labels=class_labels,
                     num_frames=num_frames,
+                    num_views=num_views,
                 )
 
         # 3. Output

@@ -29,6 +29,7 @@ class MultiviewTransformerBlock(BasicTransformerBlock):
         cross_attention_kwargs: Dict[str, Any] = None,
         class_labels: Optional[torch.LongTensor] = None,
         num_frames: int = 1,
+        num_views: int = 1,
         added_cond_kwargs: Optional[Dict[str, torch.Tensor]] = None,
     ) -> torch.Tensor:
         if cross_attention_kwargs is not None:
@@ -65,22 +66,61 @@ class MultiviewTransformerBlock(BasicTransformerBlock):
         cross_attention_kwargs = cross_attention_kwargs.copy() if cross_attention_kwargs is not None else {}
         gligen_kwargs = cross_attention_kwargs.pop("gligen", None)
 
-        # > 3D self-attention
-        enable_3d_attn = num_frames > 1
-        if enable_3d_attn:
-            norm_hidden_states = rearrange(norm_hidden_states, "(b t) hw c -> b (t hw) c", t=num_frames).contiguous()
+        enable_temporal_attn = num_frames > 1
+        enable_view_attn = num_views > 1
 
-        attn_output = self.attn1(
-            norm_hidden_states,
-            encoder_hidden_states=encoder_hidden_states if self.only_cross_attention else None,
-            attention_mask=attention_mask,
-            **cross_attention_kwargs,
-        )
+        # Stage 1: view attention (same time, across views).
+        if enable_view_attn:
+            hw_tokens = norm_hidden_states.shape[1]
+            view_states = rearrange(
+                norm_hidden_states,
+                "(b v t) hw c -> (b t hw) v c",
+                v=num_views,
+                t=num_frames,
+            ).contiguous()
+            view_attn_out = self.attn1(
+                view_states,
+                encoder_hidden_states=encoder_hidden_states if self.only_cross_attention else None,
+                attention_mask=attention_mask,
+                **cross_attention_kwargs,
+            )
+            norm_hidden_states = rearrange(
+                view_attn_out,
+                "(b t hw) v c -> (b v t) hw c",
+                v=num_views,
+                t=num_frames,
+                hw=hw_tokens,
+            ).contiguous()
 
-        # > 3D self-attention
-        if enable_3d_attn:
-            norm_hidden_states = rearrange(norm_hidden_states, "b (t hw) c -> (b t) hw c", t=num_frames).contiguous()
-            attn_output = rearrange(attn_output, "b (t hw) c -> (b t) hw c", t=num_frames).contiguous()
+        # Stage 2: temporal attention (same view, across time).
+        if enable_temporal_attn:
+            temporal_states = rearrange(
+                norm_hidden_states,
+                "(b v t) hw c -> (b v) (t hw) c",
+                v=num_views,
+                t=num_frames,
+            ).contiguous()
+            attn_output = self.attn1(
+                temporal_states,
+                encoder_hidden_states=encoder_hidden_states if self.only_cross_attention else None,
+                attention_mask=attention_mask,
+                **cross_attention_kwargs,
+            )
+            attn_output = rearrange(
+                attn_output,
+                "(b v) (t hw) c -> (b v t) hw c",
+                v=num_views,
+                t=num_frames,
+            ).contiguous()
+        elif enable_view_attn:
+            attn_output = norm_hidden_states
+        else:
+            attn_output = self.attn1(
+                norm_hidden_states,
+                encoder_hidden_states=encoder_hidden_states if self.only_cross_attention else None,
+                attention_mask=attention_mask,
+                **cross_attention_kwargs,
+            )
 
         if self.norm_type == "ada_norm_zero":
             attn_output = gate_msa.unsqueeze(1) * attn_output
@@ -113,13 +153,22 @@ class MultiviewTransformerBlock(BasicTransformerBlock):
             if self.pos_embed is not None and self.norm_type != "ada_norm_single":
                 norm_hidden_states = self.pos_embed(norm_hidden_states)
 
-            attn_output = self.attn2(
-                norm_hidden_states,
-                encoder_hidden_states=encoder_hidden_states,
-                attention_mask=encoder_attention_mask,
-                **cross_attention_kwargs,
-            )
-            hidden_states = attn_output + hidden_states
+            # When no external encoder states are provided, attn2 can only fallback to
+            # self-attention if key/value projection input dim matches current hidden dim.
+            kv_states = encoder_hidden_states
+            if kv_states is None:
+                to_k_in = getattr(getattr(self.attn2, "to_k", None), "in_features", None)
+                if to_k_in == norm_hidden_states.shape[-1]:
+                    kv_states = norm_hidden_states
+
+            if kv_states is not None:
+                attn_output = self.attn2(
+                    norm_hidden_states,
+                    encoder_hidden_states=kv_states,
+                    attention_mask=encoder_attention_mask,
+                    **cross_attention_kwargs,
+                )
+                hidden_states = attn_output + hidden_states
 
         # 4. Feed-forward
         # i2vgen doesn't have this norm 🤷‍♂️

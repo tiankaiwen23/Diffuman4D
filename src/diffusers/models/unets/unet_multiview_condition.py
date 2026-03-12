@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.utils.checkpoint
+from einops import rearrange
 
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.loaders import PeftAdapterMixin, UNet2DConditionLoadersMixin
@@ -505,6 +506,7 @@ class UNetMultiviewConditionModel(
         skeletons: Optional[torch.Tensor] = None,
         domains: List[str] = None,
         num_frames: int = 1,
+        num_views: int = 1,
         return_dict: bool = True,
     ) -> Union[UNetMultiviewConditionOutput, Tuple]:
         r"""
@@ -521,8 +523,10 @@ class UNetMultiviewConditionModel(
 
         # > temporal embedding
         if self.config.enable_tem_embeds:
-            if len(domains) * num_frames != len(emb):
-                raise ValueError(f"num_frames: {num_frames} * len(domains): {len(domains)} != len(emb): {len(emb)}")
+            if len(domains) * num_views * num_frames != len(emb):
+                raise ValueError(
+                    f"num_views: {num_views} * num_frames: {num_frames} * len(domains): {len(domains)} != len(emb): {len(emb)}"
+                )
 
             def get_num_frames_emb(domain):
                 if domain == "spatial":
@@ -538,7 +542,7 @@ class UNetMultiviewConditionModel(
                     raise ValueError(f"Invalid domain for temporal embedding: {domain}")
                 return num_frames_emb
 
-            num_frames_emb = [get_num_frames_emb(domain) for domain in domains]
+            num_frames_emb = [get_num_frames_emb(domain).repeat(num_views) for domain in domains]
             num_frames_emb = torch.cat(num_frames_emb)
 
             temporal_emb = self.temporal_proj(num_frames_emb)
@@ -551,6 +555,10 @@ class UNetMultiviewConditionModel(
         # > skeleton conditioning using pose encoder
         if self.config.enable_pose_encoder:
             skeleton_emb = self.pose_encoder(skeletons)
+            if skeleton_emb.ndim == 5:
+                skeleton_emb = rearrange(skeleton_emb, "b c t h w -> (b t) c h w")
+            elif skeleton_emb.ndim == 6:
+                skeleton_emb = rearrange(skeleton_emb, "b v c t h w -> (b v t) c h w")
             sample = sample + skeleton_emb
 
         # 3. down
@@ -558,7 +566,9 @@ class UNetMultiviewConditionModel(
         for i, downsample_block in enumerate(self.down_blocks):
             if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:
                 num_frames_block = num_frames if len(self.down_blocks) - i - 1 < self.config.num_3d_attn_blocks else 1
-                sample, res_samples = downsample_block(hidden_states=sample, temb=emb, num_frames=num_frames_block)
+                sample, res_samples = downsample_block(
+                    hidden_states=sample, temb=emb, num_frames=num_frames_block, num_views=num_views
+                )
             else:
                 sample, res_samples = downsample_block(hidden_states=sample, temb=emb)
 
@@ -567,7 +577,7 @@ class UNetMultiviewConditionModel(
         # 4. mid
         if self.mid_block is not None:
             if hasattr(self.mid_block, "has_cross_attention") and self.mid_block.has_cross_attention:
-                sample = self.mid_block(sample, emb, num_frames=num_frames)
+                sample = self.mid_block(sample, emb, num_frames=num_frames, num_views=num_views)
             else:
                 sample = self.mid_block(sample, emb)
 
@@ -581,7 +591,11 @@ class UNetMultiviewConditionModel(
             if hasattr(upsample_block, "has_cross_attention") and upsample_block.has_cross_attention:
                 num_frames_block = num_frames if i < self.config.num_3d_attn_blocks else 1
                 sample = upsample_block(
-                    hidden_states=sample, temb=emb, res_hidden_states_tuple=res_samples, num_frames=num_frames_block
+                    hidden_states=sample,
+                    temb=emb,
+                    res_hidden_states_tuple=res_samples,
+                    num_frames=num_frames_block,
+                    num_views=num_views,
                 )
             else:
                 sample = upsample_block(hidden_states=sample, temb=emb, res_hidden_states_tuple=res_samples)

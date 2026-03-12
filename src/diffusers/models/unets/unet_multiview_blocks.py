@@ -334,6 +334,7 @@ class UNetMidBlockMultiviewCrossAttn(nn.Module):
         cross_attention_kwargs: Optional[Dict[str, Any]] = None,
         encoder_attention_mask: Optional[torch.Tensor] = None,
         num_frames: int = 1,
+        num_views: int = 1,
     ) -> torch.Tensor:
         if cross_attention_kwargs is not None:
             if cross_attention_kwargs.get("scale", None) is not None:
@@ -360,6 +361,7 @@ class UNetMidBlockMultiviewCrossAttn(nn.Module):
                     attention_mask=attention_mask,
                     encoder_attention_mask=encoder_attention_mask,
                     num_frames=num_frames,
+                    num_views=num_views,
                     return_dict=False,
                 )[0]
                 hidden_states = torch.utils.checkpoint.checkpoint(
@@ -376,6 +378,7 @@ class UNetMidBlockMultiviewCrossAttn(nn.Module):
                     attention_mask=attention_mask,
                     encoder_attention_mask=encoder_attention_mask,
                     num_frames=num_frames,
+                    num_views=num_views,
                     return_dict=False,
                 )[0]
                 hidden_states = resnet(hidden_states, temb)
@@ -477,6 +480,7 @@ class CrossAttnDownBlockMultiview(nn.Module):
         encoder_attention_mask: Optional[torch.Tensor] = None,
         additional_residuals: Optional[torch.Tensor] = None,
         num_frames: int = 1,
+        num_views: int = 1,
     ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, ...]]:
         if cross_attention_kwargs is not None:
             if cross_attention_kwargs.get("scale", None) is not None:
@@ -512,6 +516,7 @@ class CrossAttnDownBlockMultiview(nn.Module):
                     attention_mask=attention_mask,
                     encoder_attention_mask=encoder_attention_mask,
                     num_frames=num_frames,
+                    num_views=num_views,
                     return_dict=False,
                 )[0]
             else:
@@ -523,6 +528,7 @@ class CrossAttnDownBlockMultiview(nn.Module):
                     attention_mask=attention_mask,
                     encoder_attention_mask=encoder_attention_mask,
                     num_frames=num_frames,
+                    num_views=num_views,
                     return_dict=False,
                 )[0]
 
@@ -635,6 +641,7 @@ class CrossAttnUpBlockMultiview(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         encoder_attention_mask: Optional[torch.Tensor] = None,
         num_frames: int = 1,
+        num_views: int = 1,
     ) -> torch.Tensor:
         if cross_attention_kwargs is not None:
             if cross_attention_kwargs.get("scale", None) is not None:
@@ -691,6 +698,7 @@ class CrossAttnUpBlockMultiview(nn.Module):
                     attention_mask=attention_mask,
                     encoder_attention_mask=encoder_attention_mask,
                     num_frames=num_frames,
+                    num_views=num_views,
                     return_dict=False,
                 )[0]
             else:
@@ -702,6 +710,7 @@ class CrossAttnUpBlockMultiview(nn.Module):
                     attention_mask=attention_mask,
                     encoder_attention_mask=encoder_attention_mask,
                     num_frames=num_frames,
+                    num_views=num_views,
                     return_dict=False,
                 )[0]
 
